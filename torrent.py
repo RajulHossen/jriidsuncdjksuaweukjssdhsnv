@@ -1,3 +1,7 @@
+'''
+RFC: https://wiki.theory.org/index.php/BitTorrentSpecification
+'''
+
 from datetime import datetime
 import hashlib 
 import struct
@@ -7,6 +11,7 @@ import requests
 import bencoding
 import utils
 
+
 class File:
   def __init__(self, filepath):
     self.filepath = filepath
@@ -14,7 +19,9 @@ class File:
     self.raw_torrent = f.read()
     f.close()
     self.torrent_header = bencoding.decode(self.raw_torrent)
+
     self.announce = self.torrent_header[b"announce"].decode("utf-8")
+
     torrent_info = self.torrent_header[b"info"]
     m = hashlib.sha1()
     m.update(bencoding.encode(torrent_info))
@@ -61,18 +68,18 @@ class File:
     result += "Name: %s\n" % torrent_name
     piece_len = torrent_info[b"piece length"]
 
-    # if b"files" in torrent_info:
-    #   # Multiple File Mode
-    #   result += "Files:\n"
-    #   for file_info in torrent_info[b"files"]:
-    #     fullpath = "/".join([x.decode("utf-8") for x in file_info[b"path"]])
-    #     result += "  '%s' (%s)\n" % (fullpath, 
-    #         utils.sizeof_fmt(file_info[b"length"]))
-    # else:
-    #   # Single File Mode
-    #   result += "Length: %s\n" % utils.sizeof_fmt(torrent_info[b"length"])
-    #   if b"md5sum" in torrent_info:
-    #     result += "Md5: %s\n" % torrent_info[b"md5sum"]
+    if b"files" in torrent_info:
+      # Multiple File Mode
+      result += "Files:\n"
+      for file_info in torrent_info[b"files"]:
+        fullpath = "/".join([x.decode("utf-8") for x in file_info[b"path"]])
+        result += "  '%s' (%s)\n" % (fullpath, 
+            utils.sizeof_fmt(file_info[b"length"]))
+    else:
+      # Single File Mode
+      result += "Length: %s\n" % utils.sizeof_fmt(torrent_info[b"length"])
+      if b"md5sum" in torrent_info:
+        result += "Md5: %s\n" % torrent_info[b"md5sum"]
 
     return result
 
@@ -80,14 +87,14 @@ class File:
 class Seeder:
   HTTP_HEADERS = {
     "Accept-Encoding": "gzip",
-    "User-Agent": "qBittorrent 4.5.0"
+    "User-Agent": "Deluge 1.3.15"
   }
 
   def __init__(self, torrent):
     self.torrent = torrent
     self.peer_id = "-DE13F0-" + utils.random_id(12)
     self.download_key = utils.random_id(12)
-    self.port = 5636
+    self.port = random.randint(1025, 65535)
 
   def load_peers(self):
     tracker_url = self.torrent.announce
@@ -97,7 +104,7 @@ class Seeder:
       "port": self.port,
       "uploaded": 0,
       "downloaded": 0,
-      "left": 0, # 假下载模式:self.torrent.total_size 假上传模式:0
+      "left": self.torrent.total_size,
       "event": "started",
       "key": self.download_key,
       "compact": 1,
@@ -105,26 +112,27 @@ class Seeder:
       "supportcrypto": 1,
       "no_peer_id": 1
     }
-    req = requests.get(tracker_url, params=http_params, 
-        headers=self.HTTP_HEADERS)
+    req = requests.get(tracker_url, params=http_params, headers=self.HTTP_HEADERS, timeout=10)
     self.info = bencoding.decode(req.content)
+    self.update_interval = self.info[b"interval"]
 
-  def upload(self):
+  def upload(self, uploaded_bytes):
     tracker_url = self.torrent.announce
     http_params = {
       "info_hash": self.torrent.file_hash, 
       "peer_id": self.peer_id.encode("ascii"),
       "port": self.port,
-      "uploaded": 0, # 如果要作弊上传速度
+      "uploaded": 0,
       "downloaded": 0,
-      "left": 0, # 假下载模式:self.torrent.total_size 假上传模式:0
+      "left": self.torrent.total_size,
       "key": self.download_key,
       "compact": 1,
       "numwant": 0,
       "supportcrypto": 1,
       "no_peer_id": 1
     }
-    requests.get(tracker_url, params=http_params, headers=self.HTTP_HEADERS)
+    http_params["uploaded"] = uploaded_bytes
+    requests.get(tracker_url, params=http_params, headers=self.HTTP_HEADERS, timeout=10)
 
   @property
   def peers(self):
@@ -142,4 +150,5 @@ class Seeder:
     result  = "Peer ID: %s\n" % self.peer_id
     result += "Key: %s\n" % self.download_key
     result += "Port: %d\n" % self.port
+    result += "Update tracker interval: %ds" % self.update_interval
     return result
